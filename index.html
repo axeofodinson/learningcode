@@ -1,0 +1,876 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- Populate content with the deployed commit SHA if you ever want build info.
+     There is no build step, so this is filled by hand or not at all. -->
+<meta name="wreckage-commit" content="">
+<title>WRECKAGE</title>
+<style>
+  :root {
+    --bg:            #14161a;
+    --bg-raised:     #1b1e24;
+    --bg-sunken:     #101216;
+    --border:        #2a2f38;
+    --border-strong: #3a414d;
+    --text:          #dfe3ea;
+    --text-dim:      #9aa3b2;
+    --text-faint:    #6b7482;
+    --accent:        #7fb4ff;
+    --match:         #7fd8a4;
+    --match-bg:      #16241d;
+    --miss:          #ff9b8a;
+    --miss-bg:       #2a1a18;
+    --warn:          #e8c37a;
+    --btn-bg:        #262b34;
+    --btn-bg-hover:  #313845;
+    --btn-text:      #dfe3ea;
+    --btn-disabled-bg:   #1e2128;
+    --btn-disabled-text: #5a616e;
+    --focus:         #7fb4ff;
+
+    --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+    --sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+
+    --gap:    20px;
+    --gap-lg: 32px;
+    --radius: 6px;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    padding: var(--gap-lg) var(--gap);
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--sans);
+    font-size: 15px;
+    line-height: 1.6;
+  }
+
+  main { max-width: 900px; margin: 0 auto; padding-bottom: 120px; }
+
+  h1 {
+    font-size: 13px;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: var(--text-faint);
+    font-weight: 600;
+    margin: 0 0 var(--gap-lg);
+  }
+
+  h2 {
+    font-size: 12px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--text-dim);
+    font-weight: 600;
+    margin: 0 0 10px;
+  }
+
+  .machine-title { font-size: 22px; font-weight: 600; margin: 0 0 4px; }
+  .machine-meta {
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--text-faint);
+    margin: 0 0 var(--gap-lg);
+  }
+
+  section { margin-bottom: var(--gap-lg); }
+  [hidden] { display: none !important; }
+
+  pre, code, textarea, .out { font-family: var(--mono); font-size: 13.5px; }
+
+  pre.source {
+    background: var(--bg-sunken);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: var(--gap);
+    margin: 0;
+    overflow-x: auto;
+    line-height: 1.7;
+    tab-size: 2;
+  }
+
+  textarea {
+    width: 100%;
+    min-height: 130px;
+    background: var(--bg-sunken);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 12px;
+    resize: vertical;
+    line-height: 1.6;
+  }
+  textarea:focus-visible, button:focus-visible {
+    outline: 2px solid var(--focus);
+    outline-offset: 2px;
+  }
+  textarea[readonly] { color: var(--text-dim); background: var(--bg); }
+
+  .hint { font-size: 12.5px; color: var(--text-faint); margin: 8px 0 0; }
+
+  button {
+    font-family: var(--sans);
+    font-size: 14px;
+    padding: 9px 18px;
+    background: var(--btn-bg);
+    color: var(--btn-text);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius);
+    cursor: pointer;
+  }
+  button:hover:not(:disabled) { background: var(--btn-bg-hover); }
+  button:disabled {
+    background: var(--btn-disabled-bg);
+    color: var(--btn-disabled-text);
+    border-color: var(--border);
+    cursor: not-allowed;
+  }
+
+  .actions { margin-top: 14px; display: flex; gap: 10px; align-items: center; }
+
+  .cols { display: grid; grid-template-columns: 1fr 1fr; gap: var(--gap); }
+  @media (max-width: 700px) { .cols { grid-template-columns: 1fr; } }
+
+  .out {
+    background: var(--bg-sunken);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 12px;
+    white-space: pre-wrap;
+    word-break: break-word;
+    margin: 0;
+    min-height: 76px;
+    line-height: 1.7;
+  }
+
+  .verdict {
+    border-radius: var(--radius);
+    padding: 12px var(--gap);
+    margin-bottom: var(--gap);
+    border: 1px solid var(--border-strong);
+    font-weight: 600;
+  }
+  .verdict.match { background: var(--match-bg); border-color: var(--match); color: var(--match); }
+  .verdict.miss  { background: var(--miss-bg);  border-color: var(--miss);  color: var(--miss); }
+  .verdict small { display: block; font-weight: 400; color: var(--text-dim); margin-top: 4px; }
+
+  .explanation {
+    background: var(--bg-raised);
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--accent);
+    border-radius: var(--radius);
+    padding: var(--gap);
+  }
+  .explanation p { margin: 0; }
+  .explanation code {
+    background: var(--bg-sunken);
+    padding: 1px 5px;
+    border-radius: 3px;
+    color: var(--accent);
+  }
+  details summary { cursor: pointer; color: var(--text-dim); font-size: 13.5px; }
+  details[open] summary { margin-bottom: 12px; }
+
+  .banner {
+    border: 1px solid var(--warn);
+    border-radius: var(--radius);
+    padding: 12px var(--gap);
+    color: var(--warn);
+    background: var(--bg-raised);
+    font-size: 13.5px;
+  }
+  .banner code { font-family: var(--mono); }
+
+  /* ---- debug panel ---- */
+  #debug-toggle {
+    position: fixed;
+    right: 14px;
+    bottom: 14px;
+    z-index: 20;
+    font-family: var(--mono);
+    font-size: 12px;
+    padding: 6px 12px;
+    opacity: 0.75;
+  }
+  #debug-toggle:hover { opacity: 1; }
+
+  #debug {
+    position: fixed;
+    left: 0; right: 0; bottom: 0;
+    height: 48vh;
+    z-index: 30;
+    background: var(--bg-raised);
+    border-top: 1px solid var(--border-strong);
+    display: flex;
+    flex-direction: column;
+    font-family: var(--mono);
+    font-size: 12px;
+  }
+  #debug header {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--border);
+    color: var(--text-faint);
+  }
+  #debug header .grow { flex: 1; }
+  #debug header button { font-size: 11.5px; padding: 4px 10px; font-family: var(--mono); }
+  #debug-log { overflow-y: auto; padding: 6px 12px 12px; }
+
+  .ev { display: flex; gap: 10px; padding: 2px 0; border-bottom: 1px solid var(--bg-sunken); }
+  .ev-seq { color: var(--text-faint); min-width: 40px; text-align: right; }
+  .ev-cat { min-width: 62px; color: var(--accent); }
+  .ev-cat[data-cat="error"] { color: var(--miss); }
+  .ev-cat[data-cat="net"]   { color: var(--match); }
+  .ev-cat[data-cat="paste"] { color: var(--warn); }
+  .ev-msg { flex: 1; word-break: break-word; color: var(--text); }
+  .ev-payload { color: var(--text-faint); white-space: pre-wrap; word-break: break-word; }
+</style>
+</head>
+<body>
+
+<main>
+  <h1>Wreckage</h1>
+
+  <div id="banner" class="banner" hidden></div>
+
+  <div id="machine" hidden>
+    <p class="machine-title" id="m-title"></p>
+    <p class="machine-meta" id="m-meta"></p>
+
+    <section>
+      <h2>Source</h2>
+      <pre class="source"><code id="m-source"></code></pre>
+    </section>
+
+    <section id="sec-predict">
+      <h2>Your prediction</h2>
+      <textarea id="prediction" spellcheck="false"
+        placeholder="What does this print? Write it exactly as you expect it, one line per console.log."
+        aria-label="Your prediction"></textarea>
+      <div class="actions">
+        <button id="btn-submit" disabled>Submit prediction</button>
+        <span class="hint" id="predict-hint">You cannot run the machine until a prediction is submitted.</span>
+      </div>
+    </section>
+
+    <section id="sec-run" hidden>
+      <div class="actions">
+        <button id="btn-run">Run the machine</button>
+        <span class="hint">Prediction locked.</span>
+      </div>
+    </section>
+
+    <section id="sec-result" hidden>
+      <div id="verdict" class="verdict"></div>
+      <div class="cols">
+        <div>
+          <h2>You predicted</h2>
+          <pre class="out" id="out-prediction"></pre>
+        </div>
+        <div>
+          <h2>Actual output</h2>
+          <pre class="out" id="out-actual"></pre>
+        </div>
+      </div>
+    </section>
+
+    <section id="sec-consolidation" hidden>
+      <div id="consolidation-direct" hidden>
+        <h2>What actually happens</h2>
+        <div class="explanation"><p id="explanation-text"></p></div>
+      </div>
+      <details id="consolidation-optional" hidden>
+        <summary>You matched. Expand the explanation anyway.</summary>
+        <div class="explanation"><p id="explanation-text-2"></p></div>
+      </details>
+    </section>
+  </div>
+</main>
+
+<button id="debug-toggle" aria-expanded="false">debug</button>
+
+<div id="debug" hidden>
+  <header>
+    <strong>debug</strong>
+    <span id="dbg-build"></span>
+    <span id="dbg-count"></span>
+    <span class="grow"></span>
+    <button id="dbg-copy">copy all</button>
+    <button id="dbg-clear">clear</button>
+    <button id="dbg-close">close</button>
+  </header>
+  <div id="debug-log"></div>
+</div>
+
+<script src="config.js"></script>
+<script>
+(function () {
+  "use strict";
+
+  var PAGE_LOADED_AT = new Date();
+  var T0 = (typeof performance !== "undefined" && performance.now) ? performance.now() : 0;
+
+  // -------------------------------------------------------------------------
+  // Debug ring buffer. In memory only. Never network-dependent — the whole
+  // point is that it still works when auth or the network is the bug.
+  // -------------------------------------------------------------------------
+  var RING_CAPACITY = 500;
+  var ring = [];
+  var seq = 0;                     // monotonic counter, NOT a timestamp
+  var sessionId = "s-" + Math.random().toString(36).slice(2, 10);
+
+  function log(category, message, payload) {
+    seq += 1;
+    var ev = {
+      seq: seq,
+      session_id: sessionId,
+      category: category,
+      message: String(message),
+      payload: payload === undefined ? null : payload,
+      at: new Date().toISOString()
+    };
+    ring.push(ev);
+    if (ring.length > RING_CAPACITY) ring.shift();
+    if (debugOpen) renderEvent(ev);
+    updateCount();
+    return ev;
+  }
+
+  function payloadToText(payload) {
+    if (payload === null || payload === undefined) return "";
+    try { return JSON.stringify(payload); }
+    catch (e) { return "[unserialisable payload: " + e.message + "]"; }
+  }
+
+  function eventToLine(ev) {
+    var line = String(ev.seq) + "  " + pad(ev.category, 6) + "  " + ev.message;
+    var p = payloadToText(ev.payload);
+    return p ? line + "  " + p : line;
+  }
+
+  function pad(s, n) {
+    s = String(s);
+    while (s.length < n) s += " ";
+    return s;
+  }
+
+  // -------------------------------------------------------------------------
+  // Debug panel UI
+  // -------------------------------------------------------------------------
+  var debugEl       = document.getElementById("debug");
+  var debugLogEl    = document.getElementById("debug-log");
+  var debugToggleEl = document.getElementById("debug-toggle");
+  var dbgBuildEl    = document.getElementById("dbg-build");
+  var dbgCountEl    = document.getElementById("dbg-count");
+  var debugOpen     = false;
+
+  function renderEvent(ev) {
+    var row = document.createElement("div");
+    row.className = "ev";
+
+    var s = document.createElement("span");
+    s.className = "ev-seq";
+    s.textContent = ev.seq;
+
+    var c = document.createElement("span");
+    c.className = "ev-cat";
+    c.setAttribute("data-cat", ev.category);
+    c.textContent = ev.category;
+
+    var m = document.createElement("span");
+    m.className = "ev-msg";
+    m.textContent = ev.message;
+
+    var p = payloadToText(ev.payload);
+    if (p) {
+      var pe = document.createElement("span");
+      pe.className = "ev-payload";
+      pe.textContent = " " + p;
+      m.appendChild(pe);
+    }
+
+    row.appendChild(s); row.appendChild(c); row.appendChild(m);
+    debugLogEl.appendChild(row);
+    debugLogEl.scrollTop = debugLogEl.scrollHeight;
+  }
+
+  function renderAllEvents() {
+    debugLogEl.textContent = "";
+    for (var i = 0; i < ring.length; i++) renderEvent(ring[i]);
+  }
+
+  function updateCount() {
+    if (!dbgCountEl) return;
+    dbgCountEl.textContent = ring.length + "/" + RING_CAPACITY + " events · seq " + seq;
+  }
+
+  function setDebugOpen(open) {
+    debugOpen = open;
+    debugEl.hidden = !open;
+    debugToggleEl.setAttribute("aria-expanded", String(open));
+    if (open) renderAllEvents();
+  }
+
+  function buildInfo() {
+    var meta = document.querySelector('meta[name="wreckage-commit"]');
+    var sha = meta && meta.content ? meta.content.trim() : "";
+    return {
+      commit: sha || "unknown (no build step)",
+      loadedAt: PAGE_LOADED_AT.toISOString(),
+      session: sessionId
+    };
+  }
+
+  function bufferAsText() {
+    var b = buildInfo();
+    var head = [
+      "WRECKAGE debug buffer",
+      "commit:  " + b.commit,
+      "loaded:  " + b.loadedAt,
+      "session: " + b.session,
+      "copied:  " + new Date().toISOString(),
+      "events:  " + ring.length + " (capacity " + RING_CAPACITY + ", last seq " + seq + ")",
+      "----"
+    ].join("\n");
+    var body = ring.map(eventToLine).join("\n");
+    return head + "\n" + body + "\n";
+  }
+
+  // Clipboard API is unavailable on some origins (notably file://), so there
+  // is always a synchronous fallback. Pasting logs into chat is the point.
+  function copyText(text) {
+    function fallback() {
+      var ta = document.createElement("textarea");
+      ta.value = text;
+      ta.setAttribute("readonly", "");
+      ta.style.position = "fixed";
+      ta.style.top = "-1000px";
+      document.body.appendChild(ta);
+      ta.select();
+      var ok = false;
+      try { ok = document.execCommand("copy"); } catch (e) { ok = false; }
+      document.body.removeChild(ta);
+      return ok;
+    }
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      return navigator.clipboard.writeText(text).then(
+        function () { return true; },
+        function () { return fallback(); }
+      );
+    }
+    return Promise.resolve(fallback());
+  }
+
+  debugToggleEl.addEventListener("click", function () {
+    setDebugOpen(!debugOpen);
+    log("nav", "debug panel " + (debugOpen ? "opened" : "closed") + " (button)");
+  });
+
+  document.getElementById("dbg-close").addEventListener("click", function () {
+    setDebugOpen(false);
+    log("nav", "debug panel closed");
+  });
+
+  document.getElementById("dbg-clear").addEventListener("click", function () {
+    ring.length = 0;               // seq deliberately NOT reset — ordering must survive a clear
+    debugLogEl.textContent = "";
+    log("nav", "debug buffer cleared");
+  });
+
+  var dbgCopyEl = document.getElementById("dbg-copy");
+  dbgCopyEl.addEventListener("click", function () {
+    var text = bufferAsText();
+    window.WRECKAGE_LAST_COPY = text;   // inspectable when the clipboard itself is the problem
+    Promise.resolve(copyText(text)).then(function (ok) {
+      dbgCopyEl.textContent = ok ? "copied" : "copy failed";
+      setTimeout(function () { dbgCopyEl.textContent = "copy all"; }, 1200);
+      log("nav", "copy-all " + (ok ? "succeeded" : "failed"), { chars: text.length });
+    });
+  });
+
+  // Ctrl+` (and Cmd+` on mac) toggles the drawer.
+  document.addEventListener("keydown", function (e) {
+    if ((e.ctrlKey || e.metaKey) && (e.key === "`" || e.code === "Backquote")) {
+      e.preventDefault();
+      setDebugOpen(!debugOpen);
+      log("nav", "debug panel " + (debugOpen ? "opened" : "closed") + " (keyboard)");
+    }
+  });
+
+  // -------------------------------------------------------------------------
+  // Global error capture
+  // -------------------------------------------------------------------------
+  window.addEventListener("error", function (e) {
+    log("error", "window.onerror: " + (e.message || "unknown"), {
+      source: e.filename || null,
+      line: e.lineno || null,
+      col: e.colno || null,
+      stack: e.error && e.error.stack ? String(e.error.stack).split("\n").slice(0, 4).join(" | ") : null
+    });
+  });
+
+  window.addEventListener("unhandledrejection", function (e) {
+    var r = e.reason;
+    log("error", "unhandled rejection: " + (r && r.message ? r.message : String(r)), {
+      stack: r && r.stack ? String(r.stack).split("\n").slice(0, 4).join(" | ") : null
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Supabase over raw fetch against PostgREST. No supabase-js.
+  // Every call goes through here so nothing reaches the network unlogged.
+  // -------------------------------------------------------------------------
+  var cfg = window.WRECKAGE_CONFIG || null;
+
+  function sbHeaders(extra) {
+    var h = {
+      "apikey": cfg.SUPABASE_ANON_KEY,
+      "Authorization": "Bearer " + cfg.SUPABASE_ANON_KEY,
+      "Content-Type": "application/json"
+    };
+    for (var k in extra) if (Object.prototype.hasOwnProperty.call(extra, k)) h[k] = extra[k];
+    return h;
+  }
+
+  function sb(table, op, path, init) {
+    if (!cfg) {
+      log("net", op + " " + table + " → skipped, no config", { table: table, op: op });
+      return Promise.resolve({ ok: false, status: 0, data: null, rowCount: 0, error: "no config" });
+    }
+
+    var url = cfg.SUPABASE_URL.replace(/\/+$/, "") + "/rest/v1" + path;
+    var method = (init && init.method) || "GET";
+    var started = Date.now();
+
+    return fetch(url, {
+      method: method,
+      headers: sbHeaders(init && init.headers),
+      body: init && init.body ? JSON.stringify(init.body) : undefined
+    }).then(function (res) {
+      return res.text().then(function (text) {
+        var data = null, parseError = null;
+        if (text) {
+          try { data = JSON.parse(text); }
+          catch (err) { parseError = err.message; }
+        }
+        var rowCount = Array.isArray(data) ? data.length : (data === null ? 0 : 1);
+        var empty = res.ok && rowCount === 0;
+
+        // An empty 200 with no error is exactly how an RLS misconfiguration
+        // hides, so it is called out in the message rather than left implicit.
+        var msg = op + " " + table + " → " + res.status +
+                  " · " + rowCount + " row" + (rowCount === 1 ? "" : "s") +
+                  (empty ? " · EMPTY, no error (check RLS)" : "") +
+                  (res.ok ? "" : " · FAILED");
+
+        log("net", msg, {
+          table: table,
+          op: op,
+          method: method,
+          status: res.status,
+          rowCount: rowCount,
+          empty: empty,
+          ms: Date.now() - started,
+          error: res.ok ? null : (data || text || null),
+          parseError: parseError
+        });
+
+        return {
+          ok: res.ok,
+          status: res.status,
+          data: data,
+          rowCount: rowCount,
+          error: res.ok ? null : (data || text || ("HTTP " + res.status))
+        };
+      });
+    }).catch(function (err) {
+      log("net", op + " " + table + " → network failure · " + err.message, {
+        table: table, op: op, method: method, status: 0,
+        rowCount: 0, ms: Date.now() - started, error: err.message
+      });
+      return { ok: false, status: 0, data: null, rowCount: 0, error: err.message };
+    });
+  }
+
+  // -------------------------------------------------------------------------
+  // Running a machine: capture console.log, execute, restore.
+  // -------------------------------------------------------------------------
+  function formatArg(a) {
+    if (typeof a === "string") return a;
+    if (a === undefined) return "undefined";
+    if (a === null) return "null";
+    var t = typeof a;
+    if (t === "number" || t === "boolean" || t === "bigint" || t === "symbol" || t === "function") {
+      return String(a);
+    }
+    try { return JSON.stringify(a); }
+    catch (e) { return String(a); }
+  }
+
+  function runSource(source) {
+    var lines = [];
+    var original = console.log;
+    var threw = null;
+
+    console.log = function () {
+      var parts = [];
+      for (var i = 0; i < arguments.length; i++) parts.push(formatArg(arguments[i]));
+      lines.push(parts.join(" "));
+    };
+
+    try {
+      // eslint-disable-next-line no-new-func
+      (new Function(source))();
+    } catch (err) {
+      threw = err;
+    } finally {
+      console.log = original;
+    }
+
+    if (threw) {
+      var name = (threw && threw.name) ? threw.name : "Error";
+      var message = (threw && threw.message) ? threw.message : String(threw);
+      lines.push(name + ": " + message);
+    }
+
+    return { output: lines.join("\n"), threw: threw ? String(threw) : null, lineCount: lines.length };
+  }
+
+  // -------------------------------------------------------------------------
+  // App state
+  // -------------------------------------------------------------------------
+  var machine   = null;
+  var startedAt = null;    // when the source first rendered
+  var attemptId = null;
+  var state     = "loading";
+
+  var el = {
+    banner:       document.getElementById("banner"),
+    machine:      document.getElementById("machine"),
+    title:        document.getElementById("m-title"),
+    meta:         document.getElementById("m-meta"),
+    source:       document.getElementById("m-source"),
+    prediction:   document.getElementById("prediction"),
+    submit:       document.getElementById("btn-submit"),
+    predictHint:  document.getElementById("predict-hint"),
+    secRun:       document.getElementById("sec-run"),
+    run:          document.getElementById("btn-run"),
+    secResult:    document.getElementById("sec-result"),
+    verdict:      document.getElementById("verdict"),
+    outPrediction:document.getElementById("out-prediction"),
+    outActual:    document.getElementById("out-actual"),
+    secConsol:    document.getElementById("sec-consolidation"),
+    consolDirect: document.getElementById("consolidation-direct"),
+    consolOptional:document.getElementById("consolidation-optional"),
+    explanation:  document.getElementById("explanation-text"),
+    explanation2: document.getElementById("explanation-text-2")
+  };
+
+  // Explanations are prose with `backticked` identifiers. Only that one
+  // transform, and via textContent, so the DB can never inject markup.
+  function renderProse(target, text) {
+    target.textContent = "";
+    var parts = String(text).split("`");
+    for (var i = 0; i < parts.length; i++) {
+      if (parts[i] === "") continue;
+      var isCode = (i % 2) === 1;
+      if (isCode) {
+        var c = document.createElement("code");
+        c.textContent = parts[i];
+        target.appendChild(c);
+      } else {
+        target.appendChild(document.createTextNode(parts[i]));
+      }
+    }
+  }
+
+  function showBanner(text) {
+    el.banner.textContent = text;
+    el.banner.hidden = false;
+  }
+
+  function setState(next) {
+    state = next;
+    log("nav", "state → " + next);
+  }
+
+  // ---- Read -----------------------------------------------------------------
+  function renderMachine(m) {
+    machine = m;
+    el.title.textContent = m.title;
+    el.meta.textContent = m.topic + " · #" + m.ordinal + " · " + m.language +
+                          (m.is_broken ? " · seeded bug" : "");
+    el.source.textContent = m.source_code;
+    el.machine.hidden = false;
+    startedAt = new Date().toISOString();
+    setState("read");
+    log("nav", "machine rendered: " + m.title, { machine_id: m.id, started_at: startedAt });
+  }
+
+  el.prediction.addEventListener("input", function () {
+    el.submit.disabled = el.prediction.value.trim().length === 0;
+  });
+
+  el.prediction.addEventListener("paste", function (e) {
+    var text = "";
+    try { text = (e.clipboardData || window.clipboardData).getData("text") || ""; }
+    catch (err) { text = ""; }
+    // Logged, never blocked. Detection, not enforcement (spec section 4).
+    log("paste", "paste into prediction field", { chars: text.length, lines: text.split("\n").length });
+  });
+
+  // ---- Predict → Submitted --------------------------------------------------
+  el.submit.addEventListener("click", function () {
+    var prediction = el.prediction.value;
+    if (prediction.trim().length === 0) return;
+
+    var submittedAt = new Date().toISOString();
+    var elapsedMs = new Date(submittedAt) - new Date(startedAt);
+
+    el.prediction.readOnly = true;
+    el.submit.disabled = true;
+    el.submit.hidden = true;
+    el.predictHint.textContent = "Submitted. This is now locked.";
+    el.secRun.hidden = false;
+    setState("submitted");
+
+    log("predict", "prediction submitted", {
+      chars: prediction.length,
+      lines: prediction.split("\n").length,
+      elapsed_ms: elapsedMs        // raw signal; the <5s heuristic lands later
+    });
+
+    // Persistence is fire-and-forget on purpose: it must never gate the loop.
+    sb("attempts", "insert", "/attempts", {
+      method: "POST",
+      headers: { "Prefer": "return=representation" },
+      body: {
+        machine_id: machine.id,
+        stage: "predict",
+        prediction: prediction,
+        started_at: startedAt,
+        submitted_at: submittedAt
+      }
+    }).then(function (res) {
+      if (res.ok && res.data && res.data[0] && res.data[0].id) {
+        attemptId = res.data[0].id;
+        log("predict", "attempt row created", { attempt_id: attemptId });
+      } else {
+        log("error", "attempt row not created — run will not be persisted", {
+          status: res.status, error: res.error
+        });
+      }
+    });
+  });
+
+  // ---- Run → Result → Consolidation ----------------------------------------
+  el.run.addEventListener("click", function () {
+    el.run.disabled = true;
+
+    var result = runSource(machine.source_code);
+    var actual = result.output;
+    var prediction = el.prediction.value;
+
+    // Exact comparison on trimmed strings. Deliberately strict for now.
+    var matched = prediction.trim() === actual.trim();
+
+    log("run", "machine executed" + (result.threw ? " (threw)" : ""), {
+      output_lines: result.lineCount,
+      threw: result.threw,
+      matched: matched
+    });
+
+    el.outPrediction.textContent = prediction.trim() || "(empty)";
+    el.outActual.textContent = actual.trim() || "(no output)";
+
+    el.verdict.className = "verdict " + (matched ? "match" : "miss");
+    el.verdict.textContent = matched ? "Match." : "Not a match.";
+    var note = document.createElement("small");
+    note.textContent = matched
+      ? "Exact string comparison on trimmed output."
+      : "Exact string comparison on trimmed output — a near miss still counts as a miss here.";
+    el.verdict.appendChild(note);
+
+    el.secResult.hidden = false;
+    el.secRun.hidden = true;
+
+    // Consolidation. Mandatory on a miss (spec hard rule 2), optional on a match.
+    var explanation = machine.explanation || "No explanation recorded for this machine.";
+    el.secConsol.hidden = false;
+    if (matched) {
+      renderProse(el.explanation2, explanation);
+      el.consolOptional.hidden = false;
+      el.consolDirect.hidden = true;
+    } else {
+      renderProse(el.explanation, explanation);
+      el.consolDirect.hidden = false;
+      el.consolOptional.hidden = true;
+    }
+    log("nav", "consolidation shown", { forced: !matched });
+
+    setState("result");
+
+    if (!attemptId) {
+      log("error", "no attempt id — result shown but not persisted");
+      return;
+    }
+    sb("attempts", "update", "/attempts?id=eq." + encodeURIComponent(attemptId), {
+      method: "PATCH",
+      headers: { "Prefer": "return=representation" },
+      body: { actual_output: actual, matched: matched }
+    }).then(function (res) {
+      if (!res.ok) log("error", "attempt row not updated", { status: res.status, error: res.error });
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Boot
+  // -------------------------------------------------------------------------
+  function boot() {
+    var b = buildInfo();
+    dbgBuildEl.textContent = "commit " + b.commit + " · loaded " + b.loadedAt;
+    updateCount();
+
+    log("nav", "page loaded", {
+      commit: b.commit,
+      loaded_at: b.loadedAt,
+      session_id: sessionId,
+      boot_ms: Math.round(((typeof performance !== "undefined" && performance.now) ? performance.now() : 0) - T0)
+    });
+
+    if (!cfg || !cfg.SUPABASE_URL || !cfg.SUPABASE_ANON_KEY) {
+      setState("error");
+      log("error", "no config — copy config.example.js to config.js");
+      showBanner("No config found. Copy config.example.js to config.js and fill in SUPABASE_URL and SUPABASE_ANON_KEY, then reload.");
+      return;
+    }
+
+    var path = "/machines?topic=eq.javascript-basics&ordinal=eq.1&select=*&limit=1";
+    sb("machines", "select", path).then(function (res) {
+      if (!res.ok) {
+        setState("error");
+        showBanner("Could not load the machine (HTTP " + res.status + "). Open the debug panel for the full response.");
+        return;
+      }
+      if (!res.data || res.data.length === 0) {
+        setState("error");
+        showBanner("Connected, but no machine came back. Either migrations/001_init.sql has not been run, or RLS is blocking the read. See the debug panel.");
+        return;
+      }
+      renderMachine(res.data[0]);
+    });
+  }
+
+  boot();
+})();
+</script>
+</body>
+</html>
