@@ -255,6 +255,7 @@
       <textarea id="prediction" spellcheck="false"
         placeholder="What does this print? Write it exactly as you expect it, one line per console.log."
         aria-label="Your prediction"></textarea>
+      <p class="hint" id="format-hint">Strings print raw, without quotes; objects and arrays print as JSON, so <code>{"n":3}</code> and not <code>{n: 3}</code>.</p>
       <div class="actions">
         <button id="btn-submit" disabled>Submit prediction</button>
         <span class="hint" id="predict-hint">You cannot run the machine until a prediction is submitted.</span>
@@ -264,7 +265,7 @@
     <section id="sec-run" hidden>
       <div class="actions">
         <button id="btn-run">Run the machine</button>
-        <span class="hint">Prediction locked.</span>
+        <span class="hint" id="run-hint">Prediction locked.</span>
       </div>
     </section>
 
@@ -317,6 +318,19 @@
 
   var PAGE_LOADED_AT = new Date();
   var T0 = (typeof performance !== "undefined" && performance.now) ? performance.now() : 0;
+
+  // How long a machine gets before the worker is terminated. One number, one
+  // place. A machine that exceeds this is not a crash — it is a real result.
+  var RUN_TIMEOUT_MS = 2000;
+
+  // Stamped on every attempt row. When the comparison policy changes, this
+  // changes with it, so old `matched` values keep the meaning they were
+  // written with instead of being silently reinterpreted.
+  var MATCH_POLICY = "v1";
+
+  // The recorded output when a machine never finishes. Deliberately a real
+  // output string, not an empty one and not an error.
+  var DID_NOT_TERMINATE = "Did not terminate within " + RUN_TIMEOUT_MS + "ms.";
 
   // -------------------------------------------------------------------------
   // Debug ring buffer. In memory only. Never network-dependent — the whole
@@ -601,48 +615,161 @@
   }
 
   // -------------------------------------------------------------------------
-  // Running a machine: capture console.log, execute, restore.
-  // -------------------------------------------------------------------------
-  function formatArg(a) {
-    if (typeof a === "string") return a;
-    if (a === undefined) return "undefined";
-    if (a === null) return "null";
-    var t = typeof a;
-    if (t === "number" || t === "boolean" || t === "bigint" || t === "symbol" || t === "function") {
-      return String(a);
-    }
-    try { return JSON.stringify(a); }
-    catch (e) { return String(a); }
-  }
+  // Running a machine.
+  //
+  // The source runs inside a Worker built from a blob URL, so an infinite loop
+  // costs a terminated worker instead of a hung tab. Verified to work over
+  // file:// in Chromium, which is the actual workflow — a classic (non-module)
+  // worker from a blob is fine on the opaque file: origin; a module worker is
+  // not, which is why this one is classic.
+  //
+  // The collector inside the worker is character-for-character the session-01
+  // main-thread collector: same formatArg, same join, same
+  // error-becomes-the-last-output-line rule, and still only console.log. The
+  // machine source is still evaluated with `new Function` — inside the worker,
+  // off the main thread. That is deliberate: inlining the source into the
+  // worker script would turn a machine's syntax error into a worker load
+  // failure instead of a "SyntaxError: ..." output line, which would change
+  // `matched` outcomes. Moving execution off the main thread is the change;
+  // how the source is evaluated is not.
+  var WORKER_SOURCE = [
+    'self.onmessage = function (e) {',
+    '  var source = (e.data && e.data.source) || "";',
+    '  var lines = [];',
+    '',
+    '  function formatArg(a) {',
+    '    if (typeof a === "string") return a;',
+    '    if (a === undefined) return "undefined";',
+    '    if (a === null) return "null";',
+    '    var t = typeof a;',
+    '    if (t === "number" || t === "boolean" || t === "bigint" || t === "symbol" || t === "function") {',
+    '      return String(a);',
+    '    }',
+    '    try { return JSON.stringify(a); }',
+    '    catch (e2) { return String(a); }',
+    '  }',
+    '',
+    '  var original = console.log;',
+    '  var threw = null;',
+    '',
+    '  console.log = function () {',
+    '    var parts = [];',
+    '    for (var i = 0; i < arguments.length; i++) parts.push(formatArg(arguments[i]));',
+    '    lines.push(parts.join(" "));',
+    '  };',
+    '',
+    '  try {',
+    '    (new Function(source))();',
+    '  } catch (err) {',
+    '    threw = err;',
+    '  } finally {',
+    '    console.log = original;',
+    '  }',
+    '',
+    '  if (threw) {',
+    '    var name = (threw && threw.name) ? threw.name : "Error";',
+    '    var message = (threw && threw.message) ? threw.message : String(threw);',
+    '    lines.push(name + ": " + message);',
+    '  }',
+    '',
+    '  self.postMessage({',
+    '    output: lines.join("\\n"),',
+    '    threw: threw ? String(threw) : null,',
+    '    lineCount: lines.length',
+    '  });',
+    '};'
+  ].join("\n");
 
+  // Resolves with { output, threw, lineCount, timedOut }. Never rejects: every
+  // failure mode has to produce a showable, recordable result.
   function runSource(source) {
-    var lines = [];
-    var original = console.log;
-    var threw = null;
+    return new Promise(function (resolve) {
+      var worker = null, url = null, timer = null, settled = false;
+      var started = Date.now();
 
-    console.log = function () {
-      var parts = [];
-      for (var i = 0; i < arguments.length; i++) parts.push(formatArg(arguments[i]));
-      lines.push(parts.join(" "));
-    };
+      function settle(result) {
+        if (settled) return;
+        settled = true;
+        if (timer !== null) clearTimeout(timer);
+        try { if (worker) worker.terminate(); } catch (e) {}
+        try { if (url) URL.revokeObjectURL(url); } catch (e) {}
+        result.ms = Date.now() - started;
+        resolve(result);
+      }
 
-    try {
-      // eslint-disable-next-line no-new-func
-      (new Function(source))();
-    } catch (err) {
-      threw = err;
-    } finally {
-      console.log = original;
-    }
+      try {
+        url = URL.createObjectURL(new Blob([WORKER_SOURCE], { type: "text/javascript" }));
+        worker = new Worker(url);
+      } catch (err) {
+        // No worker at all. Say so out loud rather than quietly running the
+        // source on the main thread instead.
+        return settle({
+          output: "Runner unavailable: " + ((err && err.message) || String(err)),
+          threw: String(err), lineCount: 1, timedOut: false, startFailed: true
+        });
+      }
 
-    if (threw) {
-      var name = (threw && threw.name) ? threw.name : "Error";
-      var message = (threw && threw.message) ? threw.message : String(threw);
-      lines.push(name + ": " + message);
-    }
+      timer = setTimeout(function () {
+        settle({ output: DID_NOT_TERMINATE, threw: null, lineCount: 1, timedOut: true });
+      }, RUN_TIMEOUT_MS);
 
-    return { output: lines.join("\n"), threw: threw ? String(threw) : null, lineCount: lines.length };
+      worker.onmessage = function (e) {
+        var d = e.data || {};
+        settle({
+          output: typeof d.output === "string" ? d.output : "",
+          threw: d.threw || null,
+          lineCount: typeof d.lineCount === "number" ? d.lineCount : 0,
+          timedOut: false
+        });
+      };
+
+      worker.onerror = function (e) {
+        if (e && e.preventDefault) e.preventDefault();
+        settle({
+          output: "Runner error: " + ((e && e.message) || "unknown"),
+          threw: (e && e.message) || "worker error",
+          lineCount: 1, timedOut: false, startFailed: true
+        });
+      };
+
+      worker.postMessage({ source: source });
+    });
   }
+
+  // -------------------------------------------------------------------------
+  // Comparison policy v1.
+  //
+  // Split on newline, trim each line, drop trailing empty lines, compare
+  // element-wise and exactly. Interior blank lines are significant. Whitespace
+  // *inside* a line is significant — "3 3" and "3  3" are different outputs.
+  // Any change here is a new policy and needs a new MATCH_POLICY value.
+  // -------------------------------------------------------------------------
+  function normalizeOutput(text) {
+    var lines = String(text === null || text === undefined ? "" : text)
+      .split("\n")
+      .map(function (line) { return line.trim(); });
+    while (lines.length > 0 && lines[lines.length - 1] === "") lines.pop();
+    return lines;
+  }
+
+  function outputsMatch(prediction, actual) {
+    var a = normalizeOutput(prediction);
+    var b = normalizeOutput(actual);
+    if (a.length !== b.length) return false;
+    for (var i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
+    return true;
+  }
+
+  // Exposed so the verification suite can exercise the policy and the runner
+  // directly, without driving the whole UI for every case.
+  window.WRECKAGE_INTERNAL = {
+    normalizeOutput: normalizeOutput,
+    outputsMatch: outputsMatch,
+    runSource: runSource,
+    RUN_TIMEOUT_MS: RUN_TIMEOUT_MS,
+    MATCH_POLICY: MATCH_POLICY,
+    DID_NOT_TERMINATE: DID_NOT_TERMINATE
+  };
 
   // -------------------------------------------------------------------------
   // App state
@@ -663,6 +790,7 @@
     predictHint:  document.getElementById("predict-hint"),
     secRun:       document.getElementById("sec-run"),
     run:          document.getElementById("btn-run"),
+    runHint:      document.getElementById("run-hint"),
     secResult:    document.getElementById("sec-result"),
     verdict:      document.getElementById("verdict"),
     outPrediction:document.getElementById("out-prediction"),
@@ -756,6 +884,7 @@
         machine_id: machine.id,
         stage: "predict",
         prediction: prediction,
+        match_policy: MATCH_POLICY,
         started_at: startedAt,
         submitted_at: submittedAt
       }
@@ -772,62 +901,79 @@
   });
 
   // ---- Run → Result → Consolidation ----------------------------------------
+  // Asynchronous now: the machine runs in a worker, so the result arrives in a
+  // callback rather than inline.
   el.run.addEventListener("click", function () {
     el.run.disabled = true;
+    el.runHint.textContent = "Running…";
 
-    var result = runSource(machine.source_code);
-    var actual = result.output;
-    var prediction = el.prediction.value;
+    runSource(machine.source_code).then(function (result) {
+      var actual = result.output;
+      var prediction = el.prediction.value;
 
-    // Exact comparison on trimmed strings. Deliberately strict for now.
-    var matched = prediction.trim() === actual.trim();
+      // A machine that never finished did not produce output to be right or
+      // wrong about, so it is not scored against the prediction.
+      var matched = result.timedOut ? false : outputsMatch(prediction, actual);
 
-    log("run", "machine executed" + (result.threw ? " (threw)" : ""), {
-      output_lines: result.lineCount,
-      threw: result.threw,
-      matched: matched
-    });
+      log("run", "machine executed" +
+                 (result.timedOut ? " (did not terminate)" : "") +
+                 (result.threw ? " (threw)" : ""), {
+        output_lines: result.lineCount,
+        threw: result.threw,
+        timed_out: !!result.timedOut,
+        ms: result.ms,
+        matched: matched,
+        match_policy: MATCH_POLICY
+      });
 
-    el.outPrediction.textContent = prediction.trim() || "(empty)";
-    el.outActual.textContent = actual.trim() || "(no output)";
+      el.outPrediction.textContent = prediction.trim() || "(empty)";
+      el.outActual.textContent = actual.trim() || "(no output)";
 
-    el.verdict.className = "verdict " + (matched ? "match" : "miss");
-    el.verdict.textContent = matched ? "Match." : "Not a match.";
-    var note = document.createElement("small");
-    note.textContent = matched
-      ? "Exact string comparison on trimmed output."
-      : "Exact string comparison on trimmed output — a near miss still counts as a miss here.";
-    el.verdict.appendChild(note);
+      el.verdict.className = "verdict " + (matched ? "match" : "miss");
+      var note = document.createElement("small");
+      if (result.timedOut) {
+        el.verdict.textContent = "The machine did not terminate.";
+        note.textContent = "Stopped after " + RUN_TIMEOUT_MS +
+          "ms and the runner was terminated. That is the result, not a crash.";
+      } else {
+        el.verdict.textContent = matched ? "Match." : "Not a match.";
+        note.textContent = matched
+          ? "Compared line by line, ignoring trailing whitespace and trailing blank lines."
+          : "Compared line by line, ignoring trailing whitespace and trailing blank lines — " +
+            "spacing inside a line and blank lines between lines still count.";
+      }
+      el.verdict.appendChild(note);
 
-    el.secResult.hidden = false;
-    el.secRun.hidden = true;
+      el.secResult.hidden = false;
+      el.secRun.hidden = true;
 
-    // Consolidation. Mandatory on a miss (spec hard rule 2), optional on a match.
-    var explanation = machine.explanation || "No explanation recorded for this machine.";
-    el.secConsol.hidden = false;
-    if (matched) {
-      renderProse(el.explanation2, explanation);
-      el.consolOptional.hidden = false;
-      el.consolDirect.hidden = true;
-    } else {
-      renderProse(el.explanation, explanation);
-      el.consolDirect.hidden = false;
-      el.consolOptional.hidden = true;
-    }
-    log("nav", "consolidation shown", { forced: !matched });
+      // Consolidation. Mandatory on a miss (spec hard rule 2), optional on a match.
+      var explanation = machine.explanation || "No explanation recorded for this machine.";
+      el.secConsol.hidden = false;
+      if (matched) {
+        renderProse(el.explanation2, explanation);
+        el.consolOptional.hidden = false;
+        el.consolDirect.hidden = true;
+      } else {
+        renderProse(el.explanation, explanation);
+        el.consolDirect.hidden = false;
+        el.consolOptional.hidden = true;
+      }
+      log("nav", "consolidation shown", { forced: !matched });
 
-    setState("result");
+      setState("result");
 
-    if (!attemptId) {
-      log("error", "no attempt id — result shown but not persisted");
-      return;
-    }
-    sb("attempts", "update", "/attempts?id=eq." + encodeURIComponent(attemptId), {
-      method: "PATCH",
-      headers: { "Prefer": "return=representation" },
-      body: { actual_output: actual, matched: matched }
-    }).then(function (res) {
-      if (!res.ok) log("error", "attempt row not updated", { status: res.status, error: res.error });
+      if (!attemptId) {
+        log("error", "no attempt id — result shown but not persisted");
+        return;
+      }
+      sb("attempts", "update", "/attempts?id=eq." + encodeURIComponent(attemptId), {
+        method: "PATCH",
+        headers: { "Prefer": "return=representation" },
+        body: { actual_output: actual, matched: matched, match_policy: MATCH_POLICY }
+      }).then(function (res) {
+        if (!res.ok) log("error", "attempt row not updated", { status: res.status, error: res.error });
+      });
     });
   });
 

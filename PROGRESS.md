@@ -70,7 +70,7 @@ it is cross-origin to Supabase (preflight) and has no clipboard API.
 
 ### Next
 
-Session 2: log view reading from `attempts` and `events`.
+Session 2: corrections — comparison policy, worker runner. (Done; see below.)
 
 ### Surprising / worth knowing
 
@@ -120,3 +120,144 @@ Session 2: log view reading from `attempts` and `events`.
 2. `cp config.example.js config.js` and fill in `SUPABASE_URL` and
    `SUPABASE_ANON_KEY`. `config.js` is gitignored.
 3. Open `index.html`.
+
+---
+
+## Session 02 — corrections: comparison policy, worker runner
+
+Corrections only. No new features.
+
+### What works
+
+- **Comparison policy v1.** `prediction.trim() === actual.trim()` is gone. Both
+  sides are split on newline, each line is trimmed, trailing empty lines are
+  dropped, and the resulting arrays are compared element-wise and exactly.
+  Interior blank lines are significant. Leading blank lines are significant.
+  Whitespace *inside* a line is significant — `3 3` and `3  3` are still
+  different outputs, deliberately. The policy is two small pure functions,
+  `normalizeOutput` and `outputsMatch`, with the rule written above them.
+- **`match_policy`.** New nullable `text` column on `attempts`, added by editing
+  `migrations/001_init.sql` directly — no 002, since nothing is deployed. Both
+  attempt writes (the `POST` on submit and the `PATCH` on run) carry
+  `match_policy: 'v1'` from a single `MATCH_POLICY` constant. When the policy
+  changes, that constant changes with it and old `matched` values keep the
+  meaning they were written with.
+- **Execution moved off the main thread.** `new Function` on the main thread is
+  replaced by a classic Worker built from a blob URL, with a hard
+  `RUN_TIMEOUT_MS = 2000` timeout in one named constant at the top of the
+  script. On timeout the worker is terminated and the run resolves with a real
+  result — `actual_output` is `"Did not terminate within 2000ms."`, the verdict
+  reads *The machine did not terminate*, consolidation opens, and the attempt
+  row is still written with `matched=false` and `match_policy='v1'`. Not a
+  crash, not an empty output.
+- **Identical collector semantics.** The collector inside the worker is
+  character-for-character the session-01 collector: same `formatArg`, same
+  `join(" ")`, same error-becomes-the-last-output-line rule, still only
+  `console.log`. `runSource` returns a Promise now, so the run handler is
+  asynchronous; the run hint reads "Running…" while a machine is in flight.
+- **Log formatting documented.** One line of help text under the prediction
+  textarea: strings print raw without quotes, objects and arrays print as JSON,
+  so `{"n":3}` and not `{n: 3}`. No behaviour change, no CSS added.
+
+### What was verified, and how
+
+**Before building the worker**, a spike checked whether Chromium would allow it
+over `file://`, since a page opened from disk is on an opaque origin. Result
+matrix, headless Chromium, default launch flags:
+
+| construction | `file://` | `http://` |
+|---|---|---|
+| classic worker from a blob URL | **works** | works |
+| worker from a `data:` URL | works | works |
+| **module** worker from a blob URL | `onerror`, no message | works |
+| blob worker with a syntax error | `onerror` with the real `SyntaxError` | same |
+
+So the runner uses a **classic** blob worker. A module worker would have been
+blocked; that is the one thing on the opaque `file:` origin that does not work.
+Separately verified over `file://`: during a `while (true) {}` spin the main
+thread kept ticking (19 ticks in 1000ms), `terminate()` returned in 0.10ms, and
+a fresh worker constructed straight afterwards still ran.
+
+**116/116 checks pass over `http://`, 116/116 over `file://`. Zero console
+errors and zero page errors in every scenario.**
+
+Scenarios A–F are the session-01 loop and failure modes; G–M are new.
+
+| Scenario | What it proves |
+|---|---|
+| A–F | Unchanged from session 01: full loop, gate, POST/PATCH shape, monotonic `seq`, insert-500, unreachable host, empty-200/RLS, missing `config.js`. |
+| G | The policy itself, 19 cases: trailing whitespace and trailing blank lines ignored on either side; interior and leading blank lines significant; interior whitespace *not* collapsed; order and line count significant. |
+| H | Trailing whitespace per line, through the real UI → now a match, `PATCH matched=true`. |
+| I | Trailing blank lines, through the real UI → now a match. |
+| J | An interior blank line, through the real UI → still a miss, consolidation forced. |
+| K | `match_policy='v1'` in the POST body and the PATCH body, and the column present in the migration. |
+| L | A `while (true) {}` fixture: times out at ~2s, worker terminated, "did not terminate" recorded as the output, attempt row written, main thread ticking throughout, debug panel and copy-all still work afterwards, and a fresh run still succeeds. |
+| M | The old and new runners produce **byte-identical** output across 9 sources — the seed, a throw, an object, an array, multiple args, no output, a syntax error, a blank interior line, and non-`log` console methods. Same line counts. The worker's output also equals the migration's stored `expected_output`. |
+
+The old runner in scenario M is not retyped: `verify/make-old-runner.js`
+extracts it verbatim from commit `73d7f69`, so the comparison is against the
+code actually replaced.
+
+The edited migration was **re-applied to a real PostgreSQL 16 cluster**:
+
+- Applies clean three times in a row; `machines` still holds exactly one row.
+- `attempts.match_policy` is `text`, nullable, positioned after `matched`.
+- All five tables still report `rowsecurity = t`; as `anon` I inserted and
+  updated rows carrying `match_policy='v1'`, and a write that omits it still
+  lands as `NULL`.
+- Applied on top of a database built from the **session-01** migration, the
+  `alter table attempts add column if not exists match_policy text` actually
+  adds the column — so that line is not dead code, and 001 is re-runnable
+  against either shape.
+- `source_code` and `expected_output` pulled back out of Postgres are
+  byte-identical to the file: the dollar-quoting still survives the round trip.
+
+### Surprising / worth knowing
+
+- **The session-01 Playwright suites did not exist.** They lived in `.verify/`,
+  which is gitignored, so they were gone. Scenarios A–F here are reconstructed
+  from the session-01 PROGRESS entry, not recovered. The suite now lives in
+  **`verify/` (no dot) and is committed**, so session 03 can genuinely extend it
+  rather than rebuild it. This is the one thing I added that the brief did not
+  list; drop the directory if you disagree.
+- **My first worker spike said `file://` was blocked, and it was wrong.** The
+  spike constructed a worker whose only job was to reply to a message, and then
+  never sent it one. Silent timeout, which reads exactly like an origin
+  restriction. Worth remembering that the failure mode being tested for and a
+  bug in the test look identical here.
+- **`new Function` still exists — inside the worker.** Inlining the machine
+  source into the worker script would turn a machine's syntax error into a
+  worker load failure instead of a `SyntaxError: ...` output line, which would
+  change `matched` outcomes. The brief required the collector semantics to be
+  unchanged, so the source is still evaluated with `new Function`, just off the
+  main thread. The change is *where* execution happens and that it can be
+  killed, not how the source is evaluated.
+- **Output produced before a hang is lost.** A machine that logs three lines and
+  then spins reports only "Did not terminate within 2000ms." — the worker is
+  terminated before it can post anything back. Streaming each line out of the
+  worker as it is logged would fix it, and would also let a partial output be
+  shown. Not built.
+- **"It hangs" is not a predictable outcome.** On a timeout `matched` is forced
+  to `false`, so a learner who correctly predicts that a machine never
+  terminates is recorded as wrong. There is no way to express that prediction
+  yet. This is adjacent to the "I was basically right" override and deliberately
+  not built.
+- **A module worker is the one thing `file://` refuses.** If a future session
+  wants `import` inside the runner, it will not work from disk. Classic worker
+  only.
+- **`RUN_TIMEOUT_MS` is also a floor on a legitimately slow machine.** 2000ms is
+  generous for hand-authored teaching machines, but a machine doing real work
+  would be recorded as non-terminating. One constant to change if that day
+  comes.
+- **The comparison policy is still strict inside a line.** `3 3` vs `3  3` is
+  still a miss, by explicit instruction. The false-miss complaint from session
+  01 is only partly addressed: trailing whitespace and trailing blank lines no
+  longer bite, quoting and interior spacing still do.
+- **`window.WRECKAGE_INTERNAL` is a test seam.** `normalizeOutput`,
+  `outputsMatch`, `runSource` and the three constants are exposed so the suite
+  can exercise the policy and the runner directly instead of driving the whole
+  UI for each of 19 comparison cases. It is inert in normal use.
+
+### Next
+
+Session 3: the log view reading from `attempts` and `events`.

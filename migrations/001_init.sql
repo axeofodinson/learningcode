@@ -36,10 +36,15 @@ create table if not exists attempts (
   prediction    text,
   actual_output text,
   matched       boolean,
+  match_policy  text,                -- which comparison policy produced `matched`
   revealed      boolean not null default false,
   started_at    timestamptz,
   submitted_at  timestamptz default now()
 );
+
+-- `create table if not exists` above is a no-op on a cluster that already has
+-- attempts, so the column is also added explicitly. Both paths are idempotent.
+alter table attempts add column if not exists match_policy text;
 
 create table if not exists hypotheses (
   id            uuid primary key default gen_random_uuid(),
